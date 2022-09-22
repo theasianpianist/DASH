@@ -4,11 +4,16 @@
 #include "dash_headers.p4"
 #include "dash_acl.p4"
 #include "dash_conntrack.p4"
+#include "dash_service_tunnel.p4"
 
 control outbound(inout headers_t hdr,
                  inout metadata_t meta,
                  inout standard_metadata_t standard_metadata)
 {
+    action drop() {
+        meta.dropped = true;
+    }
+
     action route_vnet(bit<16> dst_vnet_id) {
         meta.dst_vnet_id = dst_vnet_id;
     }
@@ -25,9 +30,67 @@ control outbound(inout headers_t hdr,
         /* send to underlay router without any encap */
     }
 
-    action drop() {
-        meta.dropped = true;
+    action transform_4to6(bit<1> st_version,
+                          bit<1> traffic_type,
+                          bit<1> exfil_policy,
+                          bit<32> link,
+                          bit<8> region,
+                          bit<16> subnet,
+                          IPv4Address overlay_ip,
+                          IPv4Address overlay_sip,
+                          IPv4Address underlay_ip,
+                          IPv4Address underlay_sip) {
+        IPv6Address dest_st_prefix = 128w0x260310e101000002 << 64;
+        IPv6Address src_st_prefix = 128w0; 
+        if (st_version == 1w1) {
+                build_service_tunnel_v1_src_prefix(src_st_prefix,
+                                                   link,
+                                                   region,
+                                                   meta.vnet_id,
+                                                   subnet);
+        }
+        else { /* service tunnel v2 */
+            build_service_tunnel_v2_src_prefix(src_st_prefix,
+                                                traffic_type,
+                                                exfil_policy,
+                                                link,
+                                                region,
+                                                meta.vnet_id,
+                                                subnet);
+
+        }
+
+        if (overlay_ip != 32w0) {
+            hdr.ipv4.dst_addr = overlay_ip;
+        }
+        if (underlay_ip != 32w0) {
+            meta.encap_data.underlay_dip = underlay_ip;
+        }
+        if (overlay_sip != 32w0) {
+            hdr.ipv4.src_addr = overlay_sip;
+        }
+        if (underlay_sip != 32w0) {
+            meta.encap_data.underlay_sip = underlay_sip;
+        }
+        service_tunnel_encode(hdr, dest_st_prefix, src_st_prefix);
     }
+
+    @name("servicetunnel_routing_type|dash_servicetunnel_routing_type")
+    table servicetunnel_routing_type {
+        key = {
+            meta.eni_id : exact @name("meta.eni_id:eni_id");
+            meta.is_dst_ip_v6 : exact @name("meta.is_dst_ip_v6:is_destination_v4_or_v6");
+            meta.dst_ip_addr : lpm @name("meta.dst_ip_addr:destination");
+        }
+
+        actions = {
+            transform_4to6;
+            drop;
+        }
+        const default_action = drop;
+    }
+
+    action route_servicetunnel() {}
 
     direct_counter(CounterType.packets_and_bytes) routing_counter;
 
@@ -43,6 +106,7 @@ control outbound(inout headers_t hdr,
             route_vnet; /* for expressroute - ecmp of overlay */
             route_vnet_direct;
             route_direct;
+            route_servicetunnel;
             drop;
         }
         const default_action = drop;
@@ -125,6 +189,16 @@ control outbound(inout headers_t hdr,
                 ca_to_pa.apply();
                 vnet.apply();
 
+                vxlan_encap(hdr,
+                            meta.encap_data.underlay_dmac,
+                            meta.encap_data.underlay_smac,
+                            meta.encap_data.underlay_dip,
+                            meta.encap_data.underlay_sip,
+                            meta.encap_data.overlay_dmac,
+                            meta.encap_data.vni);
+             }
+             route_servicetunnel: {
+                servicetunnel_routing_type.apply();
                 vxlan_encap(hdr,
                             meta.encap_data.underlay_dmac,
                             meta.encap_data.underlay_smac,

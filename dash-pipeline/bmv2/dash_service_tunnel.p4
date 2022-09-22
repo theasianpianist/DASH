@@ -3,6 +3,36 @@
 
 #include "dash_headers.p4"
 
+action build_service_tunnel_v1_src_prefix(inout IPv6Address src_prefix,
+                                          in bit<32> link_id,
+                                          in bit<8> region_id,
+                                          in bit<16> vnet_id,
+                                          in bit<16> subnet_id) {
+    src_prefix = 128w0xfde48dba << 96; /* base prefix for all v1 packets */
+    src_prefix = src_prefix + ((bit<128>)link_id[16:1] << 80);
+    src_prefix = src_prefix + ((bit<128>)region_id << 72);
+    src_prefix = src_prefix + ((bit<128>)vnet_id << 48);
+    src_prefix = src_prefix + ((bit<128>)subnet_id << 32);
+}
+
+action build_service_tunnel_v2_src_prefix(inout IPv6Address src_prefix,
+                                          in bit<1> traffic_type,
+                                          in bit<1> exfil_policy,
+                                          in bit<32> link_id,
+                                          in bit<8> region_id,
+                                          in bit<16> vnet_id,
+                                          in bit<16> subnet_id) {
+    src_prefix = 128w0xfd << 120; /* base prefix for all v2 packets */
+    // src_prefix = src_prefix + (1w0 << 119); /* encode ST v2 */
+    src_prefix = src_prefix + ((bit<128>)traffic_type << 118);
+    // src_prefix = src_prefix + (5w0 << 113); /* 5 reserved bits */
+    src_prefix = src_prefix + ((bit<128>)exfil_policy << 112);
+    src_prefix = src_prefix + ((bit<128>)link_id << 80);
+    src_prefix = src_prefix + ((bit<128>)region_id << 72);
+    src_prefix = src_prefix + ((bit<128>)vnet_id << 48);
+    src_prefix = src_prefix + ((bit<128>)subnet_id << 32);
+}
+
 /* Encodes V4 in V6 */
 action service_tunnel_encode(inout headers_t hdr,
                              in IPv6Address st_dst_prefix,
