@@ -30,7 +30,7 @@ control outbound(inout headers_t hdr,
         /* send to underlay router without any encap */
     }
 
-    action transform_4to6(bit<1> st_version,
+    action route_servicetunnel(bit<1> st_version,
                           bit<1> traffic_type,
                           bit<1> exfil_policy,
                           bit<32> link,
@@ -42,8 +42,8 @@ control outbound(inout headers_t hdr,
                           IPv4Address underlay_sip) {
         IPv6Address dest_st_prefix = 128w0x260310e101000002 << 64;
         IPv6Address src_st_prefix = 128w0; 
-        if (st_version == 1w1) {
-                build_service_tunnel_v1_src_prefix(src_st_prefix,
+        if (st_version == 1w1) { /* service tunnel v1 */
+            build_service_tunnel_v1_src_prefix(src_st_prefix,
                                                    link,
                                                    region,
                                                    meta.vnet_id,
@@ -74,23 +74,6 @@ control outbound(inout headers_t hdr,
         }
         service_tunnel_encode(hdr, dest_st_prefix, src_st_prefix);
     }
-
-    @name("servicetunnel_routing_type|dash_servicetunnel_routing_type")
-    table servicetunnel_routing_type {
-        key = {
-            meta.eni_id : exact @name("meta.eni_id:eni_id");
-            meta.is_dst_ip_v6 : exact @name("meta.is_dst_ip_v6:is_destination_v4_or_v6");
-            meta.dst_ip_addr : lpm @name("meta.dst_ip_addr:destination");
-        }
-
-        actions = {
-            transform_4to6;
-            drop;
-        }
-        const default_action = drop;
-    }
-
-    action route_servicetunnel() {}
 
     direct_counter(CounterType.packets_and_bytes) routing_counter;
 
@@ -198,7 +181,6 @@ control outbound(inout headers_t hdr,
                             meta.encap_data.vni);
              }
              route_servicetunnel: {
-                servicetunnel_routing_type.apply();
                 vxlan_encap(hdr,
                             meta.encap_data.underlay_dmac,
                             meta.encap_data.underlay_smac,
